@@ -1,0 +1,243 @@
+Practical Machine Learning Course Project
+========================================================
+
+## Introduction
+
+This is an analysis of [Human Activity Recognition data](http://groupware.les.inf.puc-rio.br/har) published by E. Velloso, A. Bulling, H. Gellersen, W. Ugulino, and H. Fuks in Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.  Using 4 sensors on the arm, forearm, belt, and dumbbell, participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).  The recorded data from the sensors was analyzed with the goal to use machine learning algorithms to predict the manner in which the exercise was performed.
+
+## Loading and preprocessing the data
+
+The data files for both the training and testing datasets were downloaded from the provided links.  It is clear that several variables have mostly missing data, so these were eliminated from both the training and testing datasets before the models were built.  In addition, variables used to track the subject were also eliminated from the dataset before analysis.
+
+```{r dataload, results='hide', cache=TRUE}
+     setwd("C:\\Users\\a0196320\\Documents\\training\\R\\Coursera\\machine learning\\project")  
+     if (!file.exists("data")){dir.create("data")}
+     fileUrl1 <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+     download.file(fileUrl1, destfile = "./data/pml-training.csv")
+     train <- read.csv("./data/pml-training.csv", stringsAsFactors=FALSE, na.strings= c("","NA"))
+     fileUrl2 <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+     download.file(fileUrl2, destfile = "./data/pml-testing.csv")
+     test <- read.csv("./data/pml-testing.csv", stringsAsFactors=FALSE, na.strings= c("","NA"))
+
+     navar <- cbind(names(train),apply(train, 2, function(col) sum(is.na(col))))
+     navarct <- apply(train, 2, function(col) sum(is.na(col)))
+     navar <- navarct[navarct > 19215]
+     badvar <- row.names(data.frame(navar))
+     train1 <- train[,!(names(train) %in% badvar)]
+     test1 <- test[,!(names(test) %in% badvar)]
+     train2 <- train1[,-c(1:7)]
+     test2 <- test1[,-c(1:7)]
+     train2$classe <- as.factor(train2$classe)
+     
+```
+
+## Exploratory Analysis
+
+Before building the model, some exploratory data analysis is done. In examining the data through boxplots (not reproduced here, but part of the markdown code, for reference), it is noted that there are a few variables with some outliers: gyros_dumbbell_x,y,z, and gyros_forearm_y,z.  Examining these outliers show that they all come from a specific observation and so that observation is excluded from the analysis.
+
+
+```{r sumplot, cache=FALSE, message=FALSE, results='hide', fig.keep='none', echo=FALSE}
+     vars <- names(train2[,!names(train2) %in% "classe"])
+     require(reshape2)
+     require(ggplot2)
+     trainplot <- melt(train2, id.vars = c("classe"))
+     p1 <- ggplot(data=trainplot, aes(x=classe, y=value))
+     p1 <- p1 + geom_boxplot() 
+     p1 <- p1 + facet_wrap(~variable, scales = "free", ncol = 5)
+     plot(p1)
+```
+
+```{r outliers, message=FALSE, results='hide'}
+     row.names(train2[train2$gyros_dumbbell_x < -150, ])
+     row.names(train2[train2$gyros_dumbbell_y > 40, ])
+     row.names(train2[train2$gyros_dumbbell_z > 300, ])
+     row.names(train2[train2$gyros_forearm_z > 200, ])
+     row.names(train2[train2$gyros_forearm_y > 300, ])
+     train2 <- train2[-5373,]
+```
+
+The boxplots are now examined with the outliers excluded:
+
+```{r sumplot2, cache=FALSE, fig.height=15, fig.width=9, message=FALSE, results='hide', fig.keep='all'}
+     vars <- names(train3[,!names(train3) %in% "classe"])
+     require(reshape2)
+     require(ggplot2)
+     trainplot <- melt(train3, id.vars = c("classe"))
+     p1 <- ggplot(data=trainplot, aes(x=classe, y=value))
+     p1 <- p1 + geom_boxplot() 
+     p1 <- p1 + facet_wrap(~variable, scales = "free", ncol = 5)
+     plot(p1)
+```
+
+It is clear that there are several predictors that will give a good response for this analysis.  Classe = A will likely be identifiable by roll_belt, yaw_belt, total_accel_belt, or accel_belt_z; classe = C will likely be identifiable by roll_forearm or yaw_forearm; classe = E will likely be identifiable by magnet_belt_y,z.  This data lends itself well to a random forest model.
+
+## Developing Models
+
+First, the data is split into a training and a test set.  The training set is then split into 5 folds and a random forest model is fit to each with a low number of trees for variable screening. Examining the average over the 5 models of the mean decrease in Gini index, it is found that the Gini index decreases sharply through the first nine predictors, then slowly decreases monotonically.  This indicates that those first nine variables will likely capture most of the variability.  Model refinement is limited to these predictors.
+
+
+```{r firstmodel, message=FALSE, warning=FALSE, results='hide', cache=FALSE}
+     require(caret)
+     require(randomForest)
+     set.seed(32323)
+     inTrain <- createDataPartition(y=train2$classe, p=0.7, list=FALSE)
+     train3 <- train2[inTrain,]
+     test3 <- train2[-inTrain,]
+     set.seed(12323)
+     folds <- createFolds(y=train3$classe, k=5, list=TRUE, returnTrain = TRUE)
+     traindata1 <- train3[folds[[1]],]; testdata1 <- train3[-folds[[1]],]
+     traindata2 <- train3[folds[[2]],]; testdata2 <- train3[-folds[[2]],]
+     traindata3 <- train3[folds[[3]],]; testdata3 <- train3[-folds[[3]],]
+     traindata4 <- train3[folds[[4]],]; testdata4 <- train3[-folds[[4]],]
+     traindata5 <- train3[folds[[5]],]; testdata5 <- train3[-folds[[5]],]
+
+     modfit1 <- randomForest(classe ~ ., data=traindata1, ntree=50)
+     modfit2 <- randomForest(classe ~ ., data=traindata2, ntree=50)
+     modfit3 <- randomForest(classe ~ ., data=traindata3, ntree=50)
+     modfit4 <- randomForest(classe ~ ., data=traindata4, ntree=50)
+     modfit5 <- randomForest(classe ~ ., data=traindata5, ntree=50)
+
+     ranks1 <- data.frame(vars=row.names(modfit1$importance), 
+                          rank1 = data.frame(modfit1$importance)$MeanDecreaseGini)
+     ranks2 <- data.frame(vars=row.names(modfit2$importance), 
+                          rank2 = data.frame(modfit2$importance)$MeanDecreaseGini)
+     ranks3 <- data.frame(vars=row.names(modfit3$importance), 
+                          rank3 = data.frame(modfit3$importance)$MeanDecreaseGini)
+     ranks4 <- data.frame(vars=row.names(modfit4$importance), 
+                          rank4 = data.frame(modfit4$importance)$MeanDecreaseGini)
+     ranks5 <- data.frame(vars=row.names(modfit5$importance), 
+                          rank5 = data.frame(modfit5$importance)$MeanDecreaseGini)
+     dfList <- list(ranks1, ranks2, ranks3, ranks4, ranks5)
+     require(plyr)
+     ranks <- join_all(dfList)
+     ranks$rank <- rowMeans(ranks[,-1])
+     ranksort <- (ranks[order(ranks$rank, decreasing=TRUE),])
+     plot(1:nrow(ranksort), ranksort$rank, main = "Average Mean Decrease in Gini Index vs. Variable",
+          xlab = "Index No. for Variable", ylab = "Average Mean Decrease in Gini Index")
+```
+
+With the limited set of variables, cross-validation is now used to compare the accuracy of model types.  Cross-validation is enabled using the caret package's trainControl function and a 6-fold cross-validation sampling is selected.  Caret automatically splits the data into 6 pieces and fits the model to 5/6 of the data, testing the results on the remaining 1/6.  Accuracy is reported as the average accuracy for the 6 runs.  The following models are compared for accuracy:  Random Forest (rf), Linear Discriminant Analysis (lda, lda2), Linear Discriminant Analysis with Stepwise Feature Selection (stepLDA), Support Vector Machines with Linear Kernel (svmLinear), Support Vector Machines with Radial Basis Function Kernel (svmRadial), Classification and Regression Tree (rpart2), and Robust Linear Discriminant Analysis (Linda).  These were all selected since they are classification models.  Each algorithm optimizes fitting parameters and reports the best model, optimized for accuracy.
+
+
+```{r bettermodel, message=FALSE, warning=FALSE, cache=TRUE, results='hide'}
+     predictors <- as.character(ranksort[1:9, "vars"])
+     set.seed(1110)
+     fitControl <- trainControl(method = "cv", number = 6, returnResamp = "final")
+
+     set.seed(9835)
+     modelRF <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "rf", 
+                     trControl = fitControl,
+                     verbose = FALSE)
+     modelRF$results
+
+     set.seed(9835)
+     modellda <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "lda", 
+                     trControl = fitControl,
+                     verbose = FALSE)
+     modellda$results
+
+     set.seed(9835)
+     modellda2 <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "lda2", 
+                     trControl = fitControl,
+                     verbose = FALSE)
+     modellda2$results
+
+     set.seed(9835)
+     modelsvmLinear <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "svmLinear", 
+                     trControl = fitControl,
+                     verbose = FALSE)
+     modelsvmLinear$results
+
+     set.seed(9835)
+     modelsvmRadial <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "svmRadial", 
+                     trControl = fitControl,
+                     verbose = FALSE)
+     modelsvmRadial$results
+
+     set.seed(9835)
+     modelcart <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "rpart2", 
+                     trControl = fitControl)
+     modelcart$results
+
+     set.seed(9835)
+     modelLinda <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "Linda", 
+                     trControl = fitControl,
+                     verbose = FALSE)
+     modelLinda$results
+```
+
+The various models are now compared. The random forest model clearly has the best accuracy, with SVMRadial and CART giving reasonable fits, but the rest not well suited.
+
+
+```{r compare, echo=TRUE, message=FALSE, warning=FALSE}
+     resamps <- resamples(list(RF = modelRF,
+                               LDA = modellda,
+                               LDA2 = modellda2,
+                               SVMLinear = modelsvmLinear,
+                               SVMRadial = modelsvmRadial,
+                               CART = modelcart,
+                               Linda = modelLinda
+                               ))
+     bwplot(resamps, layout = c(2, 1))
+```
+
+## Out of Sample Error Estimation
+
+The model with the best accuracy, random forest, is now fit to the full testing data set, minus the 30% of the original data that is reserved as a test set.  Random forest has a tuning parameter, mtry, and this was found to be optimized to a value of 5 with the cross-validation fits.  This parameter is held fixed at 5 and all the data is used for the fit.
+
+```{r bestmodel, message=FALSE, warning=FALSE}
+     modelRF$results
+```
+
+```{r alldata, message=FALSE, warning=FALSE}
+     fitControl <- trainControl(method = "cv", number = 6, returnResamp = "final")
+     set.seed(123)
+     fitControl <- trainControl(method = "none", 
+                                classProbs = TRUE,
+                                )
+     set.seed(123)
+     modelRFfinal <- train(classe ~ ., 
+                     data=train3[,c("classe",predictors)], 
+                     method = "rf", 
+                     trControl = fitControl,
+                     verbose = FALSE,
+                 tuneGrid = data.frame(mtry = 5),
+                 metric = "Accuracy")
+     modelRFfinal$finalModel
+```
+
+The out of sample error rate can now be estimated by making predictions with the 30% of the training set that was withheld for testing.  The out of sample error rate can be estimated to be 1.55%, based on the data purposely excluded from the analysis.  Comparing this to the in sample error rate from the cross-validation derived model, 1.76%, it appears that the error rate may be optimistic.  If instead the cross-validation derived model is applied to the 30% of the training set that was withheld for testing, the out of sample error rate is 1.41%.  Since one would expect the out of sample error rate to be higher than the in sample error rate, it appears that all of these values are within the noise.  All are expected to be optimistic estimates for the true out of sample error.
+
+
+```{r predictions, message=FALSE, warning=FALSE}
+     pred <- predict(modelRFfinal, newdata = test3)
+     predright <- pred == test3$classe
+     1-sum(predright)/nrow(test3)
+     confusionMatrix(pred, test3$classe)
+     1-modelRF$results[2,2]
+     pred2 <- predict(modelRF, newdata = test3)
+     predright2 <- pred2 == test3$classe
+     1-sum(predright2)/nrow(test3)
+     confusionMatrix(pred2, test3$classe)
+```
+
+
+## Conclusions
+
+The random forest model appears to fit the data well with just 9 predictors: `r predictors`.  After building a model using 6-fold cross-validation, the out of sample error rate is estimated to be 1.55% when applying that model without cross-validation, and 1.41% with cross-validation.
+
+
